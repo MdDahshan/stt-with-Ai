@@ -6,6 +6,9 @@
 ![Python](https://img.shields.io/badge/python-3.8+-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS-lightgrey.svg)
 
+## 🎥 Quick Demo
+<video src="https://github.com/MdDahshan/stt-with-Ai/raw/main/assets/demo.mp4" controls="controls" muted="muted" style="max-height:640px;"></video>
+
 ## ✨ Features
 
 - **Instant Voice-to-Text** — Record with a hotkey, get text in 1-2 seconds.
