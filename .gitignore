@@ -1,0 +1,62 @@
+# ─── Environment & Secrets ────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ─── Python ───────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+*.egg
+dist/
+build/
+*.whl
+
+# ─── Virtual Environments ────────────────────────────────────
+venv/
+.venv/
+env/
+
+# ─── IDE & Editor ────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.settings/
+*.sublime-project
+*.sublime-workspace
+
+# ─── AI / Code Assistant Tools ───────────────────────────────
+.qodo/
+.zencoder/
+.zenflow/
+.cursor/
+.aider*
+.copilot/
+
+# ─── OS Files ────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+Desktop.ini
+.Spotlight-V100
+.Trashes
+
+# ─── Temporary & Runtime Files ───────────────────────────────
+*.tmp
+*.bak
+*.log
+/tmp/
+
+# ─── Audio Recordings (temporary) ───────────────────────────
+*.wav
+*.ogg
+!assets/*.oga
+
+# ─── Transcription History (user-specific) ───────────────────
+history.md
