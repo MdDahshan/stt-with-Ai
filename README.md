@@ -36,17 +36,38 @@ nano .env
 ```
 *(Get a free API key from [console.groq.com](https://console.groq.com/))*
 
-### 4. Set Up Your Hotkey
-- **Linux:** Go to your system Keyboard Shortcuts and bind `/path/to/stt-with-Ai/scripts/groq-voice-to-text.sh` to a key combination (e.g., `Super+Space`).
-- **macOS:** Use the interactive menu (`./scripts/select-language.sh`) and select "Setup macOS Shortcuts".
+### 4. Set Up Your Hotkeys
+To use the tool seamlessly, you need to assign keyboard shortcuts to the scripts. 
+
+**Linux (GNOME, Mint, KDE, etc.):**
+Open your System Settings → **Keyboard Shortcuts** → **Custom Shortcuts** and add the following:
+
+1. **Transcription Hotkey (Main)**
+   - **Name:** STT Record/Process
+   - **Command:** `bash /path/to/stt-with-Ai/scripts/groq-voice-to-text.sh`
+   - **Shortcut:** e.g., `Shift+Ctrl+Alt+Super+Z` (or any combo you prefer)
+   
+   <img src="https://github.com/user-attachments/assets/75c2e9b8-656b-4e1b-b467-f472f854feab" width="400" alt="Main STT Shortcut">
+
+2. **Settings Menu Hotkey (Optional)**
+   - **Name:** STT Settings
+   - **Command:** `bash /path/to/stt-with-Ai/scripts/select-language.sh`
+   - **Shortcut:** e.g., `Alt+R`
+
+   <img src="https://github.com/user-attachments/assets/b82af4d0-4cb5-47e9-a477-96a84c8a29a0" width="400" alt="Settings Menu Shortcut">
+
+**macOS:** 
+Use the interactive menu (`./scripts/select-language.sh`) and select "Setup macOS Shortcuts".
 
 ## 📖 Usage
 
-### Basic Workflow
-1. **Press** your hotkey to start recording.
-2. **Speak** normally.
-3. **Press** your hotkey again to stop.
-4. The text will magically appear wherever your cursor currently is!
+### How the Main Hotkey Works (The Toggle)
+The script acts as a toggle switch. You only need **one hotkey**.
+
+1. **Press once** 👉 Starts recording (A waveform overlay appears on Linux).
+2. **Speak** your thoughts.
+3. **Press again** 👉 Stops recording and starts processing the AI.
+4. ✨ The text magically types itself out wherever your cursor is!
 
 ### Settings Menu
 Open the beautiful interactive settings menu to change language, toggle AI, or switch models:
