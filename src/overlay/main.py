@@ -180,12 +180,26 @@ class WaveformOverlay(Gtk.Window):
         self.audio_levels.pop(0)
         self.audio_levels.append(level)
         
-        # Update target bars based on audio
+        # Update target bars based on audio (center outwards)
+        center = (self.num_bars - 1) / 2.0
         for i in range(self.num_bars):
-            audio_index = self.num_bars - 1 - i
+            # Calculate distance from center
+            distance = abs(i - center)
+            # Map distance to history delay
+            delay = int(distance * 2.0)
+            
+            audio_index = (self.num_bars - 1) - delay
+            audio_index = max(0, min(audio_index, self.num_bars - 1))
+            
             audio_val = self.audio_levels[audio_index]
-            random_factor = random.uniform(0.8, 1.2)
-            self.target_bars[i] = min(audio_val * random_factor, 1.0)
+            
+            # Prevent "silence echo" but keep it smooth
+            live_val = self.audio_levels[-1]
+            max_allowed = (live_val * 2.0) + 0.15
+            audio_val = min(audio_val, max_allowed)
+            
+            # Removed random jitter for a buttery smooth wave
+            self.target_bars[i] = min(audio_val, 1.0)
             
             if self.target_bars[i] < 0.1:
                 self.target_bars[i] = 0.1
@@ -318,10 +332,20 @@ class WaveformOverlay(Gtk.Window):
                 intensity = max(0.0, 1.0 - (dist * 0.45))
                 self.bars[i] = 0.15 + (intensity * 0.65)
         else:
-            # Animate bars (smooth interpolation)
+            # Animate bars (buttery smooth interpolation)
+            center = (self.num_bars - 1) / 2.0
             for i in range(self.num_bars):
                 diff = self.target_bars[i] - self.bars[i]
-                self.bars[i] += diff * 0.25
+                
+                if diff > 0:
+                    # Rising: gentle and fluid
+                    self.bars[i] += diff * 0.18
+                else:
+                    # Falling: edges fall slightly faster than the center, but still very smooth
+                    dist = abs(i - center)
+                    fall_speed = 0.06 + (dist * 0.015) # Center falls slowly (0.06), edges gently faster (~0.17)
+                    self.bars[i] += diff * fall_speed
+                    
                 self.bars[i] = max(0.0, min(self.bars[i], 1.0))
         
         self.waveform_area.queue_draw()
