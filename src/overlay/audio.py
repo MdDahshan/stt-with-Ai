@@ -130,8 +130,8 @@ class AudioInput:
             sum_squares = sum(s ** 2 for s in shorts)
             rms = math.sqrt(sum_squares / count)
             
-            # Normalize to 0.0 - 1.0 range
-            normalized = min(rms / 3000.0, 1.0)
+            # Normalize to 0.0 - 1.0 range (increased sensitivity: 1200.0 instead of 3000.0)
+            normalized = min(rms / 1200.0, 1.0)
             
             # Success - reset error count
             if self._read_errors > 0:

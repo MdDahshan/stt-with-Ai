@@ -28,6 +28,7 @@ AI_ENHANCE="${AI_ENHANCE:-off}"
 AI_PROMPT_STYLE="${AI_PROMPT_STYLE:-strict}"
 AI_MODEL="${AI_MODEL:-auto}"
 TRANSCRIPTION_LANG="${TRANSCRIPTION_LANG:-}"
+INITIAL_PROMPT="${INITIAL_PROMPT:-}"
 SOUND_FILE="${SOUND_FILE:-$PROJECT_ROOT/assets/Staplebops.oga}"
 HISTORY_FILE="${HISTORY_FILE:-$PROJECT_ROOT/history.md}"
 ENABLE_OVERLAY="${ENABLE_OVERLAY:-auto}"   # auto/on/off
@@ -39,6 +40,28 @@ AUDIO_FILE="/tmp/groq_recording.wav"
 AUDIO_OPTIMIZED="/tmp/groq_recording.ogg"
 PRIMARY_MODEL="whisper-large-v3-turbo"
 FALLBACK_MODEL="whisper-large-v3"
+
+# Limits
+MAX_UPLOAD_SIZE=$((25 * 1024 * 1024))  # 25MB Groq limit
+MAX_RECORDING_DURATION=600              # 10 minutes hard cap
+
+# ============================================================================
+# Trap Handler — Prevent Orphaned Processes on Crash
+# ============================================================================
+_emergency_cleanup() {
+    # Kill overlay if running
+    if [ -f "/tmp/groq_waveform.pid" ]; then
+        kill "$(cat "/tmp/groq_waveform.pid")" 2>/dev/null || true
+        rm -f "/tmp/groq_waveform.pid"
+    fi
+    pkill -f "src/overlay/main.py" 2>/dev/null || true
+    rm -f "$LOCK_FILE" "$PID_FILE" /tmp/groq_processing_mode /tmp/groq_close_animation /tmp/groq_connection_error
+    # Kill recording process if still running
+    if [ -f "$PID_FILE" ]; then
+        kill "$(cat "$PID_FILE")" 2>/dev/null || true
+    fi
+}
+trap '_emergency_cleanup' INT TERM ERR
 
 # ============================================================================
 # Utility Functions
@@ -67,6 +90,11 @@ play_sound() {
 get_filesize() {
     local file="$1"
     stat -c%s "$file" 2>/dev/null || echo "0"
+}
+
+get_audio_duration() {
+    local file="$1"
+    ffprobe -v error -show_entries format=duration -of csv=p=0 "$file" 2>/dev/null | cut -d. -f1 || echo "0"
 }
 
 copy_to_clipboard() {
@@ -111,7 +139,7 @@ overlay_supported() {
         return 1
     fi
 
-    if ! command -v python3 >/dev/null 2>&1; then
+    if ! command -v /usr/bin/python3 >/dev/null 2>&1; then
         return 1
     fi
 
@@ -126,7 +154,7 @@ start_waveform_overlay() {
         return
     fi
 
-    GDK_BACKEND=x11 python3 "$PROJECT_ROOT/src/overlay/main.py" >> /tmp/groq_overlay_debug.log 2>&1 &
+    GDK_BACKEND=x11 /usr/bin/python3 "$PROJECT_ROOT/src/overlay/main.py" >> /tmp/groq_overlay_debug.log 2>&1 &
     echo "$!" > "/tmp/groq_waveform.pid"
 }
 
@@ -252,6 +280,37 @@ check_dependencies() {
 }
 
 # ============================================================================
+# Audio Optimization — Compress WAV → OGG Opus for Faster Upload
+# ============================================================================
+optimize_audio() {
+    local input="$1"
+    local output="$2"
+
+    if ! command -v ffmpeg >/dev/null 2>&1; then
+        # Fallback: use raw WAV if ffmpeg unavailable
+        cp "$input" "$output" 2>/dev/null || true
+        return 0
+    fi
+
+    # Compress to OGG Opus: mono, 16kHz, 32kbps
+    # This reduces ~1.9MB WAV → ~30KB OGG (98% smaller) for a 2-minute recording
+    ffmpeg -y -hide_banner -loglevel error \
+        -i "$input" \
+        -vn -ac 1 -ar 16000 \
+        -c:a libopus -b:a 32k \
+        "$output" 2>/dev/null
+
+    if [ $? -ne 0 ] || [ ! -f "$output" ]; then
+        # Fallback: if Opus encoding fails, try simple WAV optimization
+        ffmpeg -y -hide_banner -loglevel error \
+            -i "$input" \
+            -vn -ac 1 -ar 16000 \
+            -c:a pcm_s16le \
+            "$output" 2>/dev/null || cp "$input" "$output"
+    fi
+}
+
+# ============================================================================
 # Recording Functions
 # ============================================================================
 start_audio_capture() {
@@ -309,8 +368,22 @@ stop_recording() {
         return 1
     fi
 
-    AUDIO_OPTIMIZED="$AUDIO_FILE"
-    transcribe_and_type
+    # Optimize audio: compress WAV → OGG Opus for faster upload
+    optimize_audio "$AUDIO_FILE" "$AUDIO_OPTIMIZED"
+
+    # Guard: check optimized file size
+    local opt_size
+    opt_size="$(get_filesize "$AUDIO_OPTIMIZED")"
+    if [ "$opt_size" -gt "$MAX_UPLOAD_SIZE" ]; then
+        show_error "Recording too long (file exceeds 25MB limit)"
+        cleanup_files
+        return 1
+    fi
+
+    # Wrap transcription — prevent set -e from killing script on API errors
+    if ! transcribe_and_type; then
+        show_error "Transcription failed"
+    fi
     cleanup_files
 }
 
@@ -322,11 +395,34 @@ cleanup_files() {
 
     pkill -f "src/overlay/main.py" 2>/dev/null || true
     rm -f "$LOCK_FILE" "$PID_FILE" "$AUDIO_FILE" "$AUDIO_OPTIMIZED" /tmp/groq_recording.ogg
+    rm -f /tmp/groq_processing_mode /tmp/groq_close_animation /tmp/groq_connection_error
 }
 
 # ============================================================================
 # Transcription
 # ============================================================================
+_do_transcribe() {
+    local model="$1"
+    local upload_file="$2"
+    local temp_response="$3"
+    shift 3
+    local -a extra_args=("$@")
+
+    curl -s -w "%{http_code}" -o "$temp_response" \
+        --http2 \
+        --connect-timeout 5 \
+        --max-time "$CURL_MAX_TIME" \
+        --retry 2 --retry-delay 1 --retry-connrefused \
+        "https://api.groq.com/openai/v1/audio/transcriptions" \
+        -H "Authorization: Bearer ${GROQ_API_KEY}" \
+        -F "model=$model" \
+        "${extra_args[@]}" \
+        -F "file=@$upload_file" \
+        -F "temperature=0" \
+        -F "response_format=json" \
+        -X POST
+}
+
 transcribe_and_type() {
     local temp_response="/tmp/groq_response_$(date +%s).txt"
     local model="$PRIMARY_MODEL"
@@ -334,55 +430,65 @@ transcribe_and_type() {
     local curl_exit=0
     local body
 
-    local -a lang_args=()
+    # Build extra args: language, initial_prompt
+    local -a extra_args=()
     if [ -n "$TRANSCRIPTION_LANG" ]; then
-        lang_args=(-F "language=$TRANSCRIPTION_LANG")
+        extra_args+=(-F "language=$TRANSCRIPTION_LANG")
+    fi
+    if [ -n "$INITIAL_PROMPT" ]; then
+        extra_args+=(-F "prompt=$INITIAL_PROMPT")
     fi
 
-    http_code=$(curl -s -w "%{http_code}" -o "$temp_response" \
-        --http2 \
-        --connect-timeout 3 \
-        --max-time 20 \
-        "https://api.groq.com/openai/v1/audio/transcriptions" \
-        -H "Authorization: Bearer ${GROQ_API_KEY}" \
-        -F "model=$model" \
-        "${lang_args[@]}" \
-        -F "file=@$AUDIO_OPTIMIZED" \
-        -F "temperature=0" \
-        -F "response_format=json" \
-        -X POST) || curl_exit=$?
+    # Dynamic timeout: base 20s + 5s per minute of audio, capped at 120s
+    local audio_dur
+    audio_dur="$(get_audio_duration "$AUDIO_OPTIMIZED")"
+    CURL_MAX_TIME=$((20 + (audio_dur / 12)))
+    if [ "$CURL_MAX_TIME" -gt 120 ]; then
+        CURL_MAX_TIME=120
+    fi
 
-    if [ "$curl_exit" -eq 6 ] || [ "$curl_exit" -eq 7 ]; then
-        touch "/tmp/groq_connection_error"
-        sleep 0.5
-        if [ -f "/tmp/groq_waveform.pid" ]; then
-            touch /tmp/groq_close_animation
+    # Attempt transcription with retry
+    local attempt
+    for attempt in 1 2 3; do
+        curl_exit=0
+        http_code=$(_do_transcribe "$model" "$AUDIO_OPTIMIZED" "$temp_response" "${extra_args[@]}") || curl_exit=$?
+
+        # Connection errors
+        if [ "$curl_exit" -eq 6 ] || [ "$curl_exit" -eq 7 ] || [ "$curl_exit" -eq 28 ]; then
+            if [ "$attempt" -lt 3 ]; then
+                sleep $((attempt * 2))
+                continue
+            fi
+            touch "/tmp/groq_connection_error"
             sleep 0.5
+            if [ -f "/tmp/groq_waveform.pid" ]; then
+                touch /tmp/groq_close_animation
+                sleep 0.5
+            fi
+            rm -f "$temp_response"
+            return 1
         fi
-        cleanup_files
-        return 1
-    fi
 
-    body="$(cat "$temp_response" 2>/dev/null || true)"
-
-    if [ "$http_code" = "429" ] || echo "$body" | grep -q "rate_limit\|quota"; then
-        model="$FALLBACK_MODEL"
-        http_code=$(curl -s -w "%{http_code}" -o "$temp_response" \
-            --http2 \
-            --connect-timeout 3 \
-            --max-time 20 \
-            "https://api.groq.com/openai/v1/audio/transcriptions" \
-            -H "Authorization: Bearer ${GROQ_API_KEY}" \
-            -F "model=$model" \
-            "${lang_args[@]}" \
-            -F "file=@$AUDIO_OPTIMIZED" \
-            -F "temperature=0" \
-            -F "response_format=json" \
-            -X POST)
         body="$(cat "$temp_response" 2>/dev/null || true)"
-    fi
 
-    rm -f "$temp_response"
+        # Rate limit: try fallback model
+        if [ "$http_code" = "429" ] || echo "$body" | grep -q "rate_limit\|quota"; then
+            model="$FALLBACK_MODEL"
+            if [ "$attempt" -lt 3 ]; then
+                sleep $((attempt * 2))
+                continue
+            fi
+        fi
+
+        # Success or non-retryable error: break
+        if [ "$http_code" = "200" ] || [ "$attempt" -eq 3 ]; then
+            break
+        fi
+
+        sleep $((attempt * 2))
+    done
+
+    rm -f "$temp_response" 2>/dev/null || true
 
     if [ "$http_code" = "200" ]; then
         local transcribed_text
@@ -426,13 +532,16 @@ transcribe_and_type() {
             } &
 
             show_success
+            return 0
         else
             show_error "No speech detected"
+            return 1
         fi
     else
         local error_msg
         error_msg="$(echo "$body" | jq -r '.error.message // "Unknown error"' 2>/dev/null)"
         show_error "$error_msg"
+        return 1
     fi
 }
 
