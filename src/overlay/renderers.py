@@ -52,7 +52,7 @@ def draw_background(widget, cr, animation_progress, is_error=False):
     if is_error:
         border_color = (1.0, 0.3, 0.3, 0.95)
     else:
-        border_color = (1.0, 1.0, 1.0, 0.85)
+        border_color = (1.0, 1.0, 1.0, 0.35)
     
     # Draw Shadow — clean and minimal (6 layers)
     for i in range(6):
