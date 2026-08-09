@@ -55,7 +55,7 @@ _emergency_cleanup() {
         rm -f "/tmp/groq_waveform.pid"
     fi
     pkill -f "src/overlay/main.py" 2>/dev/null || true
-    rm -f "$LOCK_FILE" "$PID_FILE" /tmp/groq_processing_mode /tmp/groq_close_animation /tmp/groq_connection_error
+    rm -f "$LOCK_FILE" "$PID_FILE" /tmp/groq_processing_mode /tmp/groq_close_animation /tmp/groq_connection_error /tmp/groq_cancel_request
     # Kill recording process if still running
     if [ -f "$PID_FILE" ]; then
         kill "$(cat "$PID_FILE")" 2>/dev/null || true
@@ -381,6 +381,13 @@ stop_recording() {
     fi
 
     # Wrap transcription — prevent set -e from killing script on API errors
+    # Check for user cancel before transcription
+    if [ -f "/tmp/groq_cancel_request" ]; then
+        rm -f "/tmp/groq_cancel_request"
+        cleanup_files
+        return 0
+    fi
+
     if ! transcribe_and_type; then
         show_error "Transcription failed"
     fi
@@ -395,7 +402,7 @@ cleanup_files() {
 
     pkill -f "src/overlay/main.py" 2>/dev/null || true
     rm -f "$LOCK_FILE" "$PID_FILE" "$AUDIO_FILE" "$AUDIO_OPTIMIZED" /tmp/groq_recording.ogg
-    rm -f /tmp/groq_processing_mode /tmp/groq_close_animation /tmp/groq_connection_error
+    rm -f /tmp/groq_processing_mode /tmp/groq_close_animation /tmp/groq_connection_error /tmp/groq_cancel_request
 }
 
 # ============================================================================
@@ -450,6 +457,12 @@ transcribe_and_type() {
     # Attempt transcription with retry
     local attempt
     for attempt in 1 2 3; do
+        # Check for user cancel between retries
+        if [ -f "/tmp/groq_cancel_request" ]; then
+            rm -f "/tmp/groq_cancel_request" "$temp_response"
+            return 1
+        fi
+
         curl_exit=0
         http_code=$(_do_transcribe "$model" "$AUDIO_OPTIMIZED" "$temp_response" "${extra_args[@]}") || curl_exit=$?
 

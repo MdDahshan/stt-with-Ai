@@ -22,7 +22,7 @@ from audio import AudioInput
 import renderers
 
 gi.require_version('Gtk', '3.0')
-from gi.repository import Gtk, Gdk, GLib, Pango
+from gi.repository import Gtk, Gdk, GLib, Pango, GdkPixbuf
 
 class WaveformOverlay(Gtk.Window):
     def __init__(self):
@@ -39,8 +39,8 @@ class WaveformOverlay(Gtk.Window):
         self.set_skip_taskbar_hint(True)
         self.set_skip_pager_hint(True)
         
-        # DOCK type
-        self.set_type_hint(Gdk.WindowTypeHint.DOCK)
+        # UTILITY type — stays above but can receive clicks
+        self.set_type_hint(Gdk.WindowTypeHint.UTILITY)
         self.set_startup_id("")
         
         # Transparent visual
@@ -53,21 +53,36 @@ class WaveformOverlay(Gtk.Window):
         self.connect('draw', self.on_draw)
         self.connect('destroy', self.on_destroy)
         
-        # Container — compact, waveform only
+        # Container — compact, close button + waveform
         self.box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         self.box.set_valign(Gtk.Align.CENTER)
         self.box.set_margin_top(8)
         self.box.set_margin_bottom(8)
-        self.box.set_margin_start(14)
+        self.box.set_margin_start(10)
         self.box.set_margin_end(14)
         
         self.add(self.box)
         
-        # Waveform Drawing Area — sole visual element
+        # Close button — filled circle with × on the left
+        self.close_button = Gtk.DrawingArea()
+        self.close_button.set_size_request(18, 18)
+        self.close_button.connect('draw', self.on_draw_close_button)
+        self.close_button.add_events(Gdk.EventMask.BUTTON_PRESS_MASK
+                                     | Gdk.EventMask.ENTER_NOTIFY_MASK
+                                     | Gdk.EventMask.LEAVE_NOTIFY_MASK)
+        self.close_button.connect('button-press-event', self.on_close_clicked)
+        self.close_button.connect('enter-notify-event', self.on_close_hover_enter)
+        self.close_button.connect('leave-notify-event', self.on_close_hover_leave)
+        self.box.pack_start(self.close_button, False, False, 0)
+        
+        # Close button hover state
+        self._close_hover = False
+        
+        # Waveform Drawing Area
         self.waveform_area = Gtk.DrawingArea()
         self.waveform_area.set_size_request(80, 22)
         self.waveform_area.connect('draw', self.on_draw_waveform)
-        self.box.pack_start(self.waveform_area, True, True, 0)
+        self.box.pack_start(self.waveform_area, True, True, 4)
         
         # State tracking
         self.start_time = time.time()
@@ -250,6 +265,89 @@ class WaveformOverlay(Gtk.Window):
     
     def close_with_animation(self):
         self.is_closing = True
+    
+    # =========================================================================
+    # Close button handlers
+    # =========================================================================
+    
+    def on_draw_close_button(self, widget, cr):
+        """Draw a filled circle with a clean × icon"""
+        w = widget.get_allocated_width()
+        h = widget.get_allocated_height()
+        
+        if self.animation_progress < 0.7:
+            return False
+        
+        content_alpha = min((self.animation_progress - 0.7) / 0.3, 1.0)
+        
+        cx = w / 2.0
+        cy = h / 2.0
+        radius = min(w, h) / 2.0 - 1.0
+        
+        # Filled circular background — matches pill border color
+        if self._close_hover:
+            cr.set_source_rgba(1.0, 1.0, 1.0, 0.50 * content_alpha)
+        else:
+            cr.set_source_rgba(1.0, 1.0, 1.0, 0.35 * content_alpha)
+        cr.arc(cx, cy, radius, 0, 2 * math.pi)
+        cr.fill()
+        
+        # Subtle border ring
+        cr.set_source_rgba(1.0, 1.0, 1.0, 0.15 * content_alpha)
+        cr.set_line_width(1.0)
+        cr.arc(cx, cy, radius, 0, 2 * math.pi)
+        cr.stroke()
+        
+        # × icon — clean, rounded strokes
+        if self._close_hover:
+            icon_alpha = 1.0 * content_alpha
+        else:
+            icon_alpha = 0.85 * content_alpha
+        
+        cr.set_source_rgba(1.0, 1.0, 1.0, icon_alpha)
+        cr.set_line_width(2.0)
+        cr.set_line_cap(1)  # ROUND
+        
+        # Size the × proportionally inside the circle
+        arm = radius * 0.42
+        
+        cr.move_to(cx - arm, cy - arm)
+        cr.line_to(cx + arm, cy + arm)
+        cr.stroke()
+        
+        cr.move_to(cx + arm, cy - arm)
+        cr.line_to(cx - arm, cy + arm)
+        cr.stroke()
+        
+        return False
+    
+    def on_close_clicked(self, widget, event):
+        """Handle close button click — cancel request and close overlay"""
+        if self.is_closing:
+            return True
+        
+        log_debug(ErrorCategory.SIGNAL_CHECK, "Close button clicked — cancelling request")
+        
+        # Write cancel signal for the shell script
+        try:
+            with open('/tmp/groq_cancel_request', 'w') as f:
+                f.write('cancel')
+        except Exception as e:
+            log_error(ErrorCategory.FILE_IO, f"Failed to write cancel signal: {e}", e)
+        
+        # Trigger close animation
+        self.close_with_animation()
+        return True
+    
+    def on_close_hover_enter(self, widget, event):
+        self._close_hover = True
+        widget.queue_draw()
+        return False
+    
+    def on_close_hover_leave(self, widget, event):
+        self._close_hover = False
+        widget.queue_draw()
+        return False
     
     def on_draw(self, widget, cr):
         try:
